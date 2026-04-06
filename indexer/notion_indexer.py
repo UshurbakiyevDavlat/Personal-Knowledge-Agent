@@ -284,77 +284,114 @@ def index_page(page_id: str, force: bool = False) -> dict:
 
 
 # ──────────────────────────────────────────────
-# Рекурсивный обход дерева страниц
+# Фаза 1 — Сбор всех page_id из дерева (BFS)
 # ──────────────────────────────────────────────
 
-def _get_subpages(page_id: str) -> list[str]:
-    """Получить ID дочерних страниц."""
-    blocks = _fetch_blocks(page_id)
-    subpage_ids = []
-    for block in blocks:
-        if block.get("type") == "child_page":
-            subpage_ids.append(block["id"])
-    return subpage_ids
-
-
-def index_tree(root_page_id: str, force: bool = False, _depth: int = 0) -> dict:
+def _collect_page_ids(root_page_id: str, max_depth: int = 10) -> list[str]:
     """
-    Рекурсивно проиндексировать страницу и все её дочерние страницы.
-
-    Returns:
-        {"indexed": int, "skipped": int, "failed": int}
+    Обойти дерево страниц в ширину (BFS) и вернуть все page_id.
+    Не индексирует — только собирает ID для параллельной обработки.
     """
-    stats = {"indexed": 0, "skipped": 0, "failed": 0}
+    collected: list[str] = []
+    queue: list[tuple[str, int]] = [(root_page_id, 0)]
+    visited: set[str] = set()
 
-    if _depth > 10:  # Защита от глубокой рекурсии
-        logger.warning(f"Max depth reached at {root_page_id}, stopping")
-        return stats
+    while queue:
+        page_id, depth = queue.pop(0)
+        if page_id in visited or depth > max_depth:
+            continue
+        visited.add(page_id)
+        collected.append(page_id)
 
-    result = index_page(root_page_id, force=force)
-    stats[result["status"]] += 1
+        try:
+            blocks = _fetch_blocks(page_id)
+            for block in blocks:
+                if block.get("type") == "child_page":
+                    child_id = block["id"]
+                    if child_id not in visited:
+                        queue.append((child_id, depth + 1))
+        except Exception as e:
+            logger.warning(f"Failed to get subpages of {page_id}: {e}")
 
-    # Рекурсивно индексируем дочерние страницы
+    return collected
+
+
+# ──────────────────────────────────────────────
+# Фаза 2 — Параллельная индексация
+# ──────────────────────────────────────────────
+
+def _index_page_safe(args: tuple[str, bool]) -> dict:
+    """Обёртка для ThreadPoolExecutor — ловит все исключения."""
+    page_id, force = args
     try:
-        subpages = _get_subpages(root_page_id)
-        for subpage_id in subpages:
-            sub_stats = index_tree(subpage_id, force=force, _depth=_depth + 1)
-            for key in stats:
-                stats[key] += sub_stats[key]
+        return index_page(page_id, force=force)
     except Exception as e:
-        logger.error(f"Failed to get subpages of {root_page_id}: {e}")
+        logger.error(f"Unexpected error indexing {page_id}: {e}", exc_info=True)
+        return {"status": "failed", "chunks": 0, "title": page_id}
 
-    return stats
 
-
-def run_full_index(page_ids: list[str] | None = None, force: bool = False) -> dict:
+def run_full_index(
+    page_ids: list[str] | None = None,
+    force: bool = False,
+    max_workers: int = 5,
+) -> dict:
     """
-    Запустить полную индексацию всех корневых страниц.
+    Запустить параллельную индексацию всех страниц.
+
+    Два этапа:
+      1. BFS обход дерева — собираем все page_id (последовательно, быстро)
+      2. Параллельная индексация через ThreadPoolExecutor
 
     Args:
         page_ids: Список ID страниц. Если None — берёт из конфига NOTION_ROOT_PAGE_IDS
         force: Переиндексировать всё без проверки дат
+        max_workers: Количество параллельных воркеров (5 — безопасно для Notion rate limit)
 
     Returns:
         {"indexed": int, "skipped": int, "failed": int}
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     roots = page_ids or config.NOTION_ROOT_PAGE_IDS
     if not roots:
         logger.warning("No root page IDs configured. Set NOTION_ROOT_PAGE_IDS in .env")
         return {"indexed": 0, "skipped": 0, "failed": 0}
 
-    total_stats = {"indexed": 0, "skipped": 0, "failed": 0}
-    logger.info(f"Starting Notion index: {len(roots)} root page(s), force={force}")
-
+    # ── Фаза 1: собираем все page_id ────────────────
+    logger.info(f"Phase 1: Discovering pages from {len(roots)} root(s)...")
+    all_page_ids: list[str] = []
     for root_id in roots:
-        stats = index_tree(root_id, force=force)
-        for key in total_stats:
-            total_stats[key] += stats[key]
+        ids = _collect_page_ids(root_id)
+        all_page_ids.extend(ids)
+        logger.info(f"  Found {len(ids)} pages under {root_id}")
+
+    # Дедупликация (на случай пересечений)
+    all_page_ids = list(dict.fromkeys(all_page_ids))
+    logger.info(f"Phase 1 done: {len(all_page_ids)} unique pages to index")
+
+    # ── Фаза 2: параллельная индексация ─────────────
+    logger.info(f"Phase 2: Indexing with {max_workers} workers...")
+    stats = {"indexed": 0, "skipped": 0, "failed": 0}
+    args = [(pid, force) for pid in all_page_ids]
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_index_page_safe, arg): arg[0] for arg in args}
+        done = 0
+        for future in as_completed(futures):
+            result = future.result()
+            stats[result["status"]] += 1
+            done += 1
+            if done % 10 == 0 or done == len(all_page_ids):
+                logger.info(
+                    f"  Progress: {done}/{len(all_page_ids)} "
+                    f"(✅{stats['indexed']} ⏭{stats['skipped']} ❌{stats['failed']})"
+                )
 
     logger.info(
-        f"Index complete: {total_stats['indexed']} indexed, "
-        f"{total_stats['skipped']} skipped, {total_stats['failed']} failed"
+        f"Index complete: {stats['indexed']} indexed, "
+        f"{stats['skipped']} skipped, {stats['failed']} failed"
     )
-    return total_stats
+    return stats
 
 
 if __name__ == "__main__":
