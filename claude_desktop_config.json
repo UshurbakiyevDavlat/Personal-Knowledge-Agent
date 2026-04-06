@@ -1,0 +1,13 @@
+{
+  "_comment": "Добавь этот блок в свой ~/.config/claude/claude_desktop_config.json (или аналог для Cowork)",
+  "mcpServers": {
+    "knowledge-agent": {
+      "command": "python",
+      "args": ["-m", "mcp.server"],
+      "cwd": "/ПОЛНЫЙ/ПУТЬ/ДО/knowledge-agent",
+      "env": {
+        "PYTHONPATH": "/ПОЛНЫЙ/ПУТЬ/ДО/knowledge-agent"
+      }
+    }
+  }
+}

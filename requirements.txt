@@ -1,0 +1,25 @@
+# Core
+psycopg2-binary>=2.9.9      # PostgreSQL driver
+pgvector>=0.3.0              # pgvector Python client
+
+# Embeddings (Voyage AI — рекомендовано Anthropic для использования с Claude)
+voyageai>=0.3.0
+
+# Notion
+notion-client>=2.2.1         # Официальный Notion SDK
+
+# Chunking / tokenization
+tiktoken>=0.7.0              # OpenAI tokenizer (для точного подсчёта токенов)
+
+# MCP Server
+mcp>=1.0.0                   # Model Context Protocol Python SDK (FastMCP)
+
+# Scheduler (ночная переиндексация)
+apscheduler>=3.10.4
+
+# Utils
+python-dotenv>=1.0.0         # .env файлы
+httpx>=0.27.0                # HTTP клиент (для kb_add_url)
+beautifulsoup4>=4.12.0       # Парсинг HTML страниц
+markdownify>=0.12.0          # HTML → Markdown
+tenacity>=8.3.0              # Retry логика для API вызовов
