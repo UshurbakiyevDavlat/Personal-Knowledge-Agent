@@ -259,7 +259,9 @@ def index_page(page_id: str, force: bool = False) -> dict:
         if not chunks:
             return {"status": "skipped", "chunks": 0, "title": title}
 
-        chunk_texts = [c.text for c in chunks]
+        # Добавляем заголовок страницы в начало каждого чанка —
+        # это критично для качества поиска: чанк знает откуда он
+        chunk_texts = [f"[{title}]\n{c.text}" for c in chunks]
 
         # Embedding
         embeddings = embed_texts(chunk_texts)
@@ -360,6 +362,6 @@ if __name__ == "__main__":
     import sys
     logging.basicConfig(level=logging.INFO)
 
-    page_ids = sys.argv[1:] if len(sys.argv) > 1 else None
-    stats = run_full_index(page_ids=page_ids, force="--force" in (sys.argv or []))
+    page_ids = [arg for arg in sys.argv[1:] if not arg.startswith("--")] or None
+    stats = run_full_index(page_ids=page_ids, force="--force" in sys.argv)
     print(f"\nResult: {stats}")
