@@ -2,11 +2,12 @@
 Episodic Memory — факты о пользователе в PostgreSQL.
 
 Хранит постоянные факты которые Claude должен знать всегда:
-- Технические предпочтения (языки, стек, стиль)
-- Контекст проектов
-- Личные предпочтения (стиль общения, часовой пояс и т.д.)
+- Личный контекст (имя, локация, стек)
+- Опыт и навыки
+- Активные проекты
+- Предпочтения в общении
 
-Всегда читается при старте MCP сервера и передаётся в каждый ответ.
+Всегда читается MCP сервером и передаётся в каждый ответ.
 """
 import logging
 from dataclasses import dataclass
@@ -78,7 +79,6 @@ def format_facts_for_context(facts: list[Fact]) -> str:
     if not facts:
         return ""
 
-    # Группируем по категории
     by_category: dict[str, list[Fact]] = {}
     for fact in facts:
         by_category.setdefault(fact.category, []).append(fact)
@@ -94,32 +94,69 @@ def format_facts_for_context(facts: list[Fact]) -> str:
 
 
 # ──────────────────────────────────────────────
-# Предустановленные факты (заполняются один раз)
+# Базовые факты — собраны из LinkedIn, GitHub, Notion
 # ──────────────────────────────────────────────
 
-DEFAULT_FACTS = [
-    ("skill", "languages", "Go, Python, Dart/Flutter", "personal"),
-    ("skill", "stack", "Go + Flutter + PostgreSQL + Docker", "personal"),
-    ("preference", "response_style", "Короткие ответы без воды, примеры кода приветствуются", "personal"),
-    ("preference", "timezone", "Asia/Almaty (UTC+5)", "personal"),
-    ("preference", "language", "Русский язык в общении", "personal"),
-    ("personal", "name", "Давлат", "personal"),
+DEFAULT_FACTS: list[tuple[str, str, str]] = [
+    # ── Личное ──────────────────────────────────────────────
+    ("name",            "Давлат (Davlatbek Ushurbakiyev)",                           "personal"),
+    ("location",        "Алматы, Казахстан",                                         "personal"),
+    ("timezone",        "Asia/Almaty (UTC+5)",                                       "personal"),
+    ("github",          "https://github.com/UshurbakiyevDavlat",                     "personal"),
+    ("linkedin",        "https://www.linkedin.com/in/davlatbeku/",                   "personal"),
+
+    # ── Опыт ────────────────────────────────────────────────
+    ("experience_years","~4 года backend-разработки",                                "experience"),
+    ("education",       "Бакалавр Computer Science, IITU Алматы, GPA 3.5 (2019-2023)", "experience"),
+    ("last_position",   "Software Developer, Mercury Solutions / Pinemelon.com (Go, PHP, Vue, Docker), до фев 2025", "experience"),
+    ("prev_companies",  "Freedom Broker (Vue, trading), Alma Telecom (PHP), Tredo/Sxodim.com (Go, Laravel, Elasticsearch)", "experience"),
+    ("certification",   "Go: The Complete Developer's Guide — Udemy (сент 2025)",    "experience"),
+
+    # ── Технический стек ────────────────────────────────────
+    ("primary_languages","Go, PHP/Laravel, Python, TypeScript",                      "skill"),
+    ("frontend",        "Vue.js (Vue 2/3)",                                          "skill"),
+    ("databases",       "PostgreSQL, MySQL, ClickHouse, Redis, Elasticsearch",       "skill"),
+    ("devops",          "Docker, Docker Swarm, Nginx, CI/CD",                        "skill"),
+    ("current_focus",   "AI Engineering: MCP серверы, RAG системы, Python агенты",  "skill"),
+    ("architecture",    "Clean Architecture, DDD, микросервисы",                    "skill"),
+
+    # ── Активные AI проекты ─────────────────────────────────
+    ("project_knowledge_agent", "Personal Knowledge Agent — RAG на pgvector + Voyage AI, В разработке (апрель 2026)", "project"),
+    ("project_linkedin_mcp",    "LinkedIn MCP Server — MCP для LinkedIn (JavaScript, готов)",                         "project"),
+    ("project_postgres_mcp",    "PostgresMCP — MCP сервер для PostgreSQL (TypeScript, готов)",                        "project"),
+    ("project_telegram_agent",  "Telegram Agent — личный AI ассистент в Telegram (в планах)",                        "project"),
+    ("project_morning_digest",  "Morning Digest Agent — утренний AI дайджест (в планах)",                            "project"),
+    ("project_operator_agent",  "OperatorAgent — AI агент для операторов, актуальная бизнес-идея (в планах)",        "project"),
+    ("project_mycode_cli",      "MyCode CLI — аналог Claude Code, свой CLI (в планах)",                              "project"),
+
+    # ── Рабочий контекст ────────────────────────────────────
+    ("work_project",    "mercuryx (MPS) — основной рабочий проект на Go",            "work"),
+    ("work_stack",      "Go, Kafka, Redis, PostgreSQL, Docker в рамках MPS проекта", "work"),
+    ("mcp_ideas",       "Планируемые MCP: Redis, Weather, Docker, HTTP/REST, Kafka, Grafana, Habit Tracker", "work"),
+
+    # ── Предпочтения ────────────────────────────────────────
+    ("language",        "Русский язык в общении",                                    "preference"),
+    ("response_style",  "Короткие ответы без воды, примеры кода приветствуются",     "preference"),
+    ("tools",           "Cowork + Claude Code как основные AI инструменты",          "preference"),
 ]
 
 
 def seed_default_facts() -> None:
     """Заполнить базовые факты если они ещё не существуют."""
-    for key, value, category, _ in DEFAULT_FACTS:
+    seeded = 0
+    for key, value, category in DEFAULT_FACTS:
         try:
-            # Только если ещё нет
             with get_conn() as conn:
                 with get_cursor(conn) as cur:
                     cur.execute("SELECT 1 FROM user_facts WHERE key = %s", (key,))
                     if not cur.fetchone():
                         upsert_fact(key, value, category)
-                        logger.info(f"Seeded fact: {key} = {value}")
+                        seeded += 1
         except Exception as e:
-            logger.error(f"Failed to seed fact {key}: {e}")
+            logger.error(f"Failed to seed fact '{key}': {e}")
+
+    if seeded:
+        logger.info(f"Seeded {seeded} new facts")
 
 
 if __name__ == "__main__":
