@@ -8,6 +8,11 @@ Scheduler — периодическая переиндексация Notion.
 """
 import logging
 import sys
+import os
+
+# Добавляем корень проекта в sys.path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 logging.basicConfig(
     stream=sys.stderr,
