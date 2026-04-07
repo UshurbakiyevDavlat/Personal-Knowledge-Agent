@@ -1,107 +1,92 @@
 # 🧠 Personal Knowledge Agent
 
-Персональная RAG система — личная база знаний которую Claude использует как память. Индексирует твои Notion страницы, статьи и заметки, позволяя Claude находить нужный контекст без передачи всего содержимого в каждом запросе.
+Персональная RAG система — личная база знаний которую Claude использует как память. Индексирует Notion страницы, статьи и заметки, позволяя Claude находить нужный контекст без передачи всего содержимого в каждом запросе.
 
-**Экономия токенов: 94% · В 16× дешевле · Работает в любом разговоре с Claude**
+**Экономия токенов: 94% · В 16× дешевле · Работает в Claude Code и Cowork**
 
 ## Как это работает
 
 ```
-Индексация (один раз):
+Индексация (инкрементально, каждые 2 часа):
 Notion / URL / файл → Chunking → Voyage AI Embeddings → pgvector
 
 Поиск (каждый запрос):
-Твой вопрос → Embedding → Cosine similarity → Топ-5 чанков → Claude
+Твой вопрос → Embedding → Hybrid Search (vector + BM25 + RRF) → Топ-5 чанков → Claude
 ```
 
 Claude получает доступ к базе знаний через MCP сервер — инструменты `kb_search`, `kb_add_document` и другие доступны в любом разговоре автоматически.
 
 ## Стек
 
-- **Python 3.11+** — основной язык
+- **Python 3.12** — основной язык
+- **MCP SDK 1.27.0** (официальный от Anthropic) — MCP сервер
 - **PostgreSQL 17 + pgvector** — хранение и поиск векторов (HNSW индекс)
 - **Voyage AI** (`voyage-3`) — эмбеддинги, рекомендованы Anthropic для Claude
-- **FastMCP** — MCP сервер для интеграции с Claude Code
-- **Notion API** — индексация твоих страниц
-- **Docker** — изолированная БД, не зависит от локального PostgreSQL
+- **Notion API** — индексация страниц
+- **Docker / Docker Compose** — изолированная БД
+- **nginx + Let's Encrypt** — HTTPS для Cowork интеграции (VPS)
+- **systemd** — автозапуск сервисов на VPS
 
 ---
 
-## Быстрый старт
+## Быстрый старт (локально, Claude Code)
 
 ### Требования
 
-- Python 3.11+
+- Python 3.12+
 - Docker Desktop
 - Аккаунты: [Voyage AI](https://www.voyageai.com) · [Notion Integrations](https://www.notion.so/my-integrations)
 
 ### 1. Клонируй репозиторий
 
 ```bash
-git clone https://github.com/твой-username/knowledge-agent.git
-cd knowledge-agent
+git clone https://github.com/UshurbakiyevDavlat/Personal-Knowledge-Agent.git
+cd Personal-Knowledge-Agent
 ```
 
-### 2. Запусти PostgreSQL с pgvector через Docker
+### 2. Запусти PostgreSQL + pgvector через Docker Compose
 
 ```bash
-docker run -d \
-  --name knowledge-agent-db \
-  -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=knowledge_agent \
-  -p 5434:5432 \
-  --restart unless-stopped \
-  pgvector/pgvector:pg17
+docker compose up -d
 ```
 
-> Порт `5434` — чтобы не конфликтовать с локальным PostgreSQL если он есть.
+`docker-compose.yml` поднимает `pgvector/pgvector:pg17` на порту `5432` (localhost only).
 
-Проверь что контейнер запустился:
+Проверь:
 ```bash
-docker ps | grep knowledge-agent-db
+docker compose ps
 ```
 
 ### 3. Накати схему БД
 
 ```bash
-docker cp schema.sql knowledge-agent-db:/schema.sql
-docker exec -it knowledge-agent-db psql -U postgres -d knowledge_agent -f /schema.sql
+docker exec -i pgvector psql -U agent -d knowledge < schema.sql
 ```
 
-Проверь таблицы:
-```bash
-docker exec -it knowledge-agent-db psql -U postgres -d knowledge_agent -c "\dt"
-```
-
-Должно появиться: `documents`, `user_facts`, `index_log`.
+Должно вывести `CREATE TABLE`, `CREATE INDEX` — без ошибок.
 
 ### 4. Настрой окружение
 
 ```bash
-# Виртуальное окружение
-python -m venv venv
+python3 -m venv venv
 
 # Активация
 source venv/bin/activate        # Linux / macOS
 .\venv\Scripts\Activate.ps1    # Windows PowerShell
 
-# Зависимости
 pip install -r requirements.txt
 ```
 
-Создай `.env` из шаблона:
-```bash
-cp .env.example .env
-```
-
-Открой `.env` и заполни:
+Создай `.env`:
 
 ```env
-DATABASE_URL=postgresql://postgres:postgres@localhost:5434/knowledge_agent
-VOYAGE_API_KEY=pa-...        # https://www.voyageai.com
-NOTION_API_KEY=secret_...    # https://www.notion.so/my-integrations
-NOTION_ROOT_PAGE_IDS=...     # ID корневой страницы Notion (из URL)
+DATABASE_URL=postgresql://agent:agentpass@localhost:5432/knowledge
+VOYAGE_API_KEY=pa-...
+NOTION_API_KEY=secret_...
+NOTION_ROOT_PAGE_IDS=...
 ```
+
+> ⚠️ Не добавляй inline-комментарии к числовым значениям — `int()` не умеет их парсить.
 
 **Как найти Notion Page ID:** открой страницу в браузере, скопируй UUID из URL:
 ```
@@ -110,74 +95,53 @@ https://notion.so/workspace/Моя-страница-32e262630981...
                                           это и есть Page ID
 ```
 
-### 5. Первая индексация Notion
+### 5. Первая индексация и поиск
 
 ```bash
-# Заполнить базовые факты о пользователе
-python -m memory.episodic
-
-# Запустить индексацию (первый раз ~5-10 мин в зависимости от объёма)
+# Запустить индексацию Notion
 python -m indexer.notion_indexer
 
 # Проверить поиск
 python -m retriever.search "как работает auth"
 ```
 
-### 6. Подключи к Claude Code
+### 6. Подключи к Claude Code (stdio)
 
-MCP сервер добавляется через CLI:
-
-```bash
-# macOS / Linux
-claude mcp add knowledge-agent \
-  /полный/путь/до/venv/bin/python \
-  /полный/путь/до/knowledge-agent/run_mcp_server.py
-
-# Windows (PowerShell)
+```powershell
+# Windows
 claude mcp add knowledge-agent `
   "C:\путь\до\knowledge-agent\venv\Scripts\python.exe" `
   "C:\путь\до\knowledge-agent\run_mcp_server.py"
+
+# Linux / macOS
+claude mcp add knowledge-agent \
+  /путь/до/knowledge-agent/venv/bin/python \
+  /путь/до/knowledge-agent/run_mcp_server.py
 ```
 
-**Windows пример (реальный путь):**
-```powershell
-claude mcp add knowledge-agent `
-  "C:\Users\dushu\bestForLearning\knowledge-agent\venv\Scripts\python.exe" `
-  "C:\Users\dushu\bestForLearning\knowledge-agent\run_mcp_server.py"
-```
-
-Проверь что подключился:
+Проверь:
 ```bash
 claude mcp list
 # knowledge-agent: ... ✔ connected
 ```
 
-> **Важно:** `run_mcp_server.py` — враппер-скрипт который автоматически устанавливает рабочую директорию и путь к модулям. Не используй `-m agent_server.server` напрямую — `claude mcp add` не поддерживает флаги начинающиеся с `-`.
+---
 
-### 7. Cowork (облачный интерфейс)
+## Cowork / Claude.ai (VPS деплой)
 
-> ⚠️ **Текущий статус:** В разработке. Планируется деплой на VPS.
+MCP endpoint: **`https://davlat-kb.duckdns.org/sse`**
 
-Cowork работает в облаке и не имеет доступа к локальному stdio серверу. Для работы в Cowork нужен HTTP/SSE транспорт с публичным URL:
+Добавить: Claude.ai → Settings → Integrations → Add MCP Server → вставить URL.
 
-```python
-# run_mcp_server.py (HTTP режим для Cowork)
-mcp.run(transport="sse", host="0.0.0.0", port=8000)
-```
-
-**Варианты деплоя:**
-- **ngrok** — быстро и временно: `ngrok http 8000`, добавить URL в Claude.ai → Settings → Integrations
-- **VPS** — постоянно: задеплоить на сервер с HTTPS, добавить как постоянный коннектор
+Подробная инструкция по деплою ниже.
 
 ---
 
 ## MCP Инструменты
 
-После подключения Claude может использовать:
-
 | Инструмент | Описание |
 |---|---|
-| `kb_search` | Семантический поиск по базе знаний |
+| `kb_search` | Гибридный поиск по базе знаний (vector + BM25 + RRF) |
 | `kb_add_document` | Добавить текст вручную |
 | `kb_add_url` | Проиндексировать веб-страницу |
 | `kb_index_notion` | Переиндексировать Notion (всё или конкретные страницы) |
@@ -192,11 +156,10 @@ mcp.run(transport="sse", host="0.0.0.0", port=8000)
 
 ```
 knowledge-agent/
-├── schema.sql              # SQL схема БД (запускается один раз)
+├── schema.sql              # SQL схема БД
 ├── requirements.txt
-├── .env.example            # Шаблон настроек
 ├── config.py               # Конфигурация из .env
-├── run_mcp_server.py       # Враппер для запуска MCP (используется claude mcp add)
+├── run_mcp_server.py       # Враппер запуска MCP (SSE транспорт)
 ├── core/
 │   ├── db.py               # Connection pool PostgreSQL
 │   ├── chunker.py          # Recursive text splitting (500 токенов)
@@ -206,27 +169,163 @@ knowledge-agent/
 ├── retriever/
 │   └── search.py           # Гибридный поиск (vector + full-text + RRF)
 ├── memory/
-│   └── episodic.py         # Факты о пользователе
-├── agent_server/
-│   └── server.py           # MCP сервер (FastMCP, stdio транспорт)
+│   └── episodic.py         # Факты о пользователе (эпизодическая память)
+├── agent_server/           # Не mcp/ — конфликт имён с пакетом mcp
+│   └── server.py           # FastMCP SSE, host=0.0.0.0, port=8000
 └── scheduler/
-    └── reindex.py          # Ночная переиндексация (APScheduler, 03:00 Almaty)
+    └── reindex.py          # Переиндексация каждые 2 часа (APScheduler)
 ```
-
-> **Примечание:** папка называется `agent_server/` (не `mcp/`) — чтобы избежать конфликта имён с установленным пакетом `mcp`.
 
 ---
 
-## Ночная переиндексация (опционально)
+## VPS Деплой (Hetzner + HTTPS)
 
-Автоматически обновляет базу каждую ночь в 03:00 — только изменённые страницы:
+### Инфраструктура
+
+- **Провайдер:** Hetzner Cloud, CAX11 (2 vCPU ARM64, 4GB RAM) — ~$5.49/мес
+- **OS:** Ubuntu 24.04
+- **Домен:** DuckDNS (бесплатно) — `davlat-kb.duckdns.org`
+- **HTTPS:** Let's Encrypt + Certbot (автообновление)
+
+### Установка на сервере
 
 ```bash
-# Запустить в фоне
-nohup python -m scheduler.reindex > /tmp/ka-scheduler.log 2>&1 &
+# Docker
+curl -fsSL https://get.docker.com | sh
 
-# Или через cron (Linux/macOS):
-# 0 3 * * * cd /путь/до/knowledge-agent && venv/bin/python -m indexer.notion_indexer
+# Python зависимости
+apt install -y python3-venv python3-dev python3-pip
+
+# nginx + Certbot
+apt install -y nginx certbot python3-certbot-nginx
+
+# Firewall
+ufw allow OpenSSH && ufw allow 80 && ufw allow 443 && ufw enable
+```
+
+### PostgreSQL (Docker Compose)
+
+```bash
+mkdir -p /opt/knowledge-agent && cd /opt/knowledge-agent
+# положить docker-compose.yml (см. файл в репо)
+docker compose up -d
+```
+
+### Деплой кода
+
+```bash
+cd /opt/knowledge-agent
+git clone git@github.com:UshurbakiyevDavlat/Personal-Knowledge-Agent.git app
+cd app
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Создать .env с DATABASE_URL, VOYAGE_API_KEY, NOTION_API_KEY, NOTION_ROOT_PAGE_IDS
+# Накатить схему
+docker exec -i pgvector psql -U agent -d knowledge < schema.sql
+```
+
+### systemd — MCP сервер
+
+Файл `/etc/systemd/system/knowledge-agent.service`:
+
+```ini
+[Unit]
+Description=Knowledge Agent MCP Server
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/knowledge-agent/app
+EnvironmentFile=/opt/knowledge-agent/app/.env
+ExecStart=/opt/knowledge-agent/app/venv/bin/python run_mcp_server.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### systemd — Scheduler (переиндексация каждые 2 часа)
+
+Файл `/etc/systemd/system/knowledge-agent-scheduler.service`:
+
+```ini
+[Unit]
+Description=Knowledge Agent Notion Scheduler
+After=network.target knowledge-agent.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/knowledge-agent/app
+EnvironmentFile=/opt/knowledge-agent/app/.env
+ExecStart=/opt/knowledge-agent/app/venv/bin/python scheduler/reindex.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+systemctl daemon-reload
+systemctl enable knowledge-agent knowledge-agent-scheduler
+systemctl start knowledge-agent knowledge-agent-scheduler
+```
+
+### nginx конфиг
+
+Файл `/etc/nginx/sites-available/knowledge-agent`:
+
+```nginx
+server {
+    listen 80;
+    server_name davlat-kb.duckdns.org;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 86400;
+    }
+}
+```
+
+```bash
+ln -s /etc/nginx/sites-available/knowledge-agent /etc/nginx/sites-enabled/
+nginx -t && systemctl restart nginx
+certbot --nginx -d davlat-kb.duckdns.org --non-interactive --agree-tos -m your@email.com
+```
+
+### Деплой обновлений
+
+```bash
+# Локально
+git push
+
+# На сервере
+cd /opt/knowledge-agent/app && git pull
+systemctl restart knowledge-agent knowledge-agent-scheduler
+```
+
+### Управление сервисами
+
+```bash
+systemctl status knowledge-agent knowledge-agent-scheduler
+journalctl -u knowledge-agent -f
+journalctl -u knowledge-agent-scheduler -f
 ```
 
 ---
@@ -239,34 +338,15 @@ nohup python -m scheduler.reindex > /tmp/ka-scheduler.log 2>&1 &
 | 20 вопросов в день | ~$3.00 | ~$0.18 |
 | В месяц | ~$90 | ~$5.40 |
 
-Индексация 500 Notion страниц через Voyage AI: **~$0.01** (первые 200M токенов бесплатно).
+- Индексация 500 Notion страниц: **~$0.01** (Voyage AI, первые 200M токенов бесплатно)
+- VPS Hetzner CAX11: **~$5.49/мес**
 
----
-
-## Docker команды — шпаргалка
-
-```bash
-# Запустить контейнер
-docker start knowledge-agent-db
-
-# Остановить
-docker stop knowledge-agent-db
-
-# Подключиться к psql
-docker exec -it knowledge-agent-db psql -U postgres -d knowledge_agent
-
-# Посмотреть логи
-docker logs knowledge-agent-db
-
-# Удалить контейнер (данные сохранятся в volume если настроен)
-docker rm -f knowledge-agent-db
-```
+**Итого: ~$10.89/мес с RAG + VPS** vs ~$90/мес без RAG — **экономия 88%**
 
 ---
 
 ## .gitignore
 
-Не забудь добавить в `.gitignore`:
 ```
 .env
 venv/
