@@ -129,9 +129,10 @@ claude mcp list
 
 ## Cowork / Claude.ai (VPS деплой)
 
-MCP endpoint: **`https://davlat-kb.duckdns.org/sse`**
+После деплоя на VPS подключи свой MCP endpoint в Cowork через "Customize connectors".
+Endpoint формируется автоматически на основе твоего домена: `https://<твой-домен>/sse`
 
-Добавить: Claude.ai → Settings → Integrations → Add MCP Server → вставить URL.
+> ⚠️ Не публикуй свой endpoint публично — добавь токен-защиту через nginx (см. раздел безопасности ниже).
 
 Подробная инструкция по деплою ниже.
 
@@ -184,7 +185,7 @@ knowledge-agent/
 
 - **Провайдер:** Hetzner Cloud, CAX11 (2 vCPU ARM64, 4GB RAM) — ~$5.49/мес
 - **OS:** Ubuntu 24.04
-- **Домен:** DuckDNS (бесплатно) — `davlat-kb.duckdns.org`
+- **Домен:** DuckDNS (бесплатно) или любой другой
 - **HTTPS:** Let's Encrypt + Certbot (автообновление)
 
 ### Установка на сервере
@@ -289,7 +290,7 @@ systemctl start knowledge-agent knowledge-agent-scheduler
 ```nginx
 server {
     listen 80;
-    server_name davlat-kb.duckdns.org;
+    server_name <твой-домен>;
 
     location / {
         proxy_pass http://127.0.0.1:8000;
@@ -306,7 +307,7 @@ server {
 ```bash
 ln -s /etc/nginx/sites-available/knowledge-agent /etc/nginx/sites-enabled/
 nginx -t && systemctl restart nginx
-certbot --nginx -d davlat-kb.duckdns.org --non-interactive --agree-tos -m your@email.com
+certbot --nginx -d <твой-домен> --non-interactive --agree-tos -m your@email.com
 ```
 
 ### Деплой обновлений
@@ -326,6 +327,51 @@ systemctl restart knowledge-agent knowledge-agent-scheduler
 systemctl status knowledge-agent knowledge-agent-scheduler
 journalctl -u knowledge-agent -f
 journalctl -u knowledge-agent-scheduler -f
+```
+
+---
+
+## Безопасность
+
+MCP сервер содержит личные данные — закрой его токеном через nginx.
+
+Замени единый `location /` на два блока:
+
+```nginx
+# /sse — требует токен
+location /sse {
+    if ($arg_token != "ВАШ_СЕКРЕТНЫЙ_ТОКЕН") {
+        return 401;
+    }
+    proxy_pass http://127.0.0.1:8000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_read_timeout 86400;
+}
+
+# /messages/ — пропускаем (session_id = неявная авторизация)
+location / {
+    proxy_pass http://127.0.0.1:8000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_read_timeout 86400;
+}
+```
+
+Сгенерировать токен:
+```bash
+openssl rand -hex 32
+```
+
+Подключение в Cowork — указывай URL с токеном:
+```
+https://<твой-домен>/sse?token=ВАШ_СЕКРЕТНЫЙ_ТОКЕН
 ```
 
 ---
