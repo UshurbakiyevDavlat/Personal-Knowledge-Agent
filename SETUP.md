@@ -41,7 +41,7 @@ cp .env.example .env
 #   DATABASE_URL=postgresql://postgres:пароль@localhost:5432/knowledge_agent
 #   OPENAI_API_KEY=sk-...
 #   NOTION_API_KEY=secret_...
-#   NOTION_ROOT_PAGE_IDS=<ID страницы Обучение>
+#   NOTION_ROOT_PAGE_IDS=YOUR_NOTION_PAGE_ID
 ```
 
 ---
