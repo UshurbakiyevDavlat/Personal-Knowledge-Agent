@@ -178,10 +178,10 @@ def _save_chunks(
     last_edited: datetime | None = None,
 ) -> int:
     """Сохранить чанки в БД. Возвращает количество сохранённых чанков."""
-    import json
+    from psycopg2.extras import Json
     total = len(chunks_text)
     doc_date = last_edited.date().isoformat() if last_edited else None
-    meta = json.dumps({"doc_date": doc_date})
+    meta = Json({"doc_date": doc_date})
     with get_cursor(conn) as cur:
         for i, (text, embedding) in enumerate(zip(chunks_text, embeddings)):
             cur.execute(

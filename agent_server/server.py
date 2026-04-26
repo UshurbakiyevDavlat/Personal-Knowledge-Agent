@@ -113,8 +113,8 @@ def kb_add_document(
     Returns:
         Подтверждение с количеством созданных чанков
     """
-    import json
     from datetime import date
+    from psycopg2.extras import Json
     from core.db import get_conn, get_cursor
 
     chunks = chunk_document(text)
@@ -125,7 +125,7 @@ def kb_add_document(
     embeddings = embed_texts(chunk_texts)
 
     resolved_date = doc_date or date.today().isoformat()
-    meta = json.dumps({"doc_date": resolved_date})
+    meta = Json({"doc_date": resolved_date})
 
     with get_conn() as conn:
         with get_cursor(conn) as cur:
