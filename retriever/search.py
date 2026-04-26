@@ -28,6 +28,7 @@ class SearchResult:
     chunk_total: int
     score: float          # итоговый score (выше = релевантнее)
     metadata: dict
+    doc_date: str | None = None  # дата документа (YYYY-MM-DD)
 
 
 def _vector_search(
@@ -35,6 +36,7 @@ def _vector_search(
     top_k: int,
     source_filter: str | None,
     conn,
+    date_from: str | None = None,
 ) -> list[dict]:
     """Поиск по векторному сходству."""
     sql = """
@@ -47,19 +49,24 @@ def _vector_search(
             chunk_index,
             chunk_total,
             metadata,
+            indexed_at,
             1 - (embedding <=> %s::vector) AS score
         FROM documents
         WHERE embedding IS NOT NULL
         {source_filter}
+        {date_filter}
         ORDER BY embedding <=> %s::vector
         LIMIT %s
     """.format(
-        source_filter="AND source_type = %s" if source_filter else ""
+        source_filter="AND source_type = %s" if source_filter else "",
+        date_filter="AND COALESCE(metadata->>'doc_date', to_char(indexed_at, 'YYYY-MM-DD')) >= %s" if date_from else "",
     )
 
     params: list[Any] = [query_embedding]
     if source_filter:
         params.append(source_filter)
+    if date_from:
+        params.append(date_from)
     params.extend([query_embedding, top_k * 2])  # берём больше для RRF
 
     with get_cursor(conn) as cur:
@@ -72,6 +79,7 @@ def _fulltext_search(
     top_k: int,
     source_filter: str | None,
     conn,
+    date_from: str | None = None,
 ) -> list[dict]:
     """Full-text поиск (русский + английский)."""
     sql = """
@@ -84,6 +92,7 @@ def _fulltext_search(
             chunk_index,
             chunk_total,
             metadata,
+            indexed_at,
             ts_rank(
                 to_tsvector('russian', content) || to_tsvector('english', content),
                 websearch_to_tsquery('russian', %s) || websearch_to_tsquery('english', %s)
@@ -96,15 +105,19 @@ def _fulltext_search(
                 to_tsvector('english', content) @@ websearch_to_tsquery('english', %s)
             )
             {source_filter}
+            {date_filter}
         ORDER BY score DESC
         LIMIT %s
     """.format(
-        source_filter="AND source_type = %s" if source_filter else ""
+        source_filter="AND source_type = %s" if source_filter else "",
+        date_filter="AND COALESCE(metadata->>'doc_date', to_char(indexed_at, 'YYYY-MM-DD')) >= %s" if date_from else "",
     )
 
     params: list[Any] = [query, query, query, query]
     if source_filter:
         params.append(source_filter)
+    if date_from:
+        params.append(date_from)
     params.append(top_k * 2)
 
     with get_cursor(conn) as cur:
@@ -152,6 +165,7 @@ def search(
     top_k: int = 5,
     source_filter: str | None = None,
     hybrid: bool = True,
+    date_from: str | None = None,
 ) -> list[SearchResult]:
     """
     Основная функция поиска.
@@ -161,6 +175,7 @@ def search(
         top_k: Сколько результатов вернуть
         source_filter: Фильтр по типу источника ('notion', 'url', 'file', 'manual')
         hybrid: True = vector + full-text, False = только vector
+        date_from: Вернуть только записи не раньше этой даты (YYYY-MM-DD)
 
     Returns:
         Список SearchResult, отсортированных по релевантности
@@ -168,16 +183,16 @@ def search(
     if not query.strip():
         return []
 
-    logger.info(f"Search: '{query}' top_k={top_k} source={source_filter} hybrid={hybrid}")
+    logger.info(f"Search: '{query}' top_k={top_k} source={source_filter} hybrid={hybrid} date_from={date_from}")
 
     # Эмбеддинг запроса
     query_embedding = embed_query(query)
 
     with get_conn() as conn:
-        vector_results = _vector_search(query_embedding, top_k, source_filter, conn)
+        vector_results = _vector_search(query_embedding, top_k, source_filter, conn, date_from=date_from)
 
         if hybrid and len(query.split()) >= 2:
-            fts_results = _fulltext_search(query, top_k, source_filter, conn)
+            fts_results = _fulltext_search(query, top_k, source_filter, conn, date_from=date_from)
             ranked = _reciprocal_rank_fusion(vector_results, fts_results)
         else:
             ranked = [(doc, doc["score"]) for doc in vector_results]
@@ -185,6 +200,11 @@ def search(
     # Берём топ-K и конвертируем в SearchResult
     results = []
     for doc, score in ranked[:top_k]:
+        meta = doc.get("metadata") or {}
+        # doc_date: берём из metadata, fallback — indexed_at
+        doc_date = meta.get("doc_date")
+        if not doc_date and doc.get("indexed_at"):
+            doc_date = doc["indexed_at"].date().isoformat()
         results.append(SearchResult(
             id=doc["id"],
             title=doc["title"] or "Untitled",
@@ -194,7 +214,8 @@ def search(
             chunk_index=doc["chunk_index"],
             chunk_total=doc["chunk_total"],
             score=round(score, 4),
-            metadata=doc["metadata"] or {},
+            metadata=meta,
+            doc_date=doc_date,
         ))
 
     logger.info(f"Found {len(results)} results")
@@ -219,8 +240,10 @@ def format_results_for_claude(results: list[SearchResult]) -> str:
         if r.chunk_total > 1:
             chunk_info = f" [часть {r.chunk_index + 1}/{r.chunk_total}]"
 
+        date_info = f" | 📅 {r.doc_date}" if r.doc_date else ""
+
         parts.append(
-            f"**[{i}] {r.title}**{chunk_info}{source_info}\n"
+            f"**[{i}] {r.title}**{chunk_info}{date_info}{source_info}\n"
             f"```\n{r.content}\n```"
         )
 

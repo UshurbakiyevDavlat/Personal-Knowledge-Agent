@@ -66,6 +66,7 @@ def kb_search(
     query: str,
     top_k: int = 5,
     source_filter: str | None = None,
+    date_from: str | None = None,
 ) -> str:
     """
     Поиск по личной базе знаний (Notion, статьи, заметки).
@@ -75,12 +76,13 @@ def kb_search(
         query: Вопрос или ключевые слова для поиска (на русском или английском)
         top_k: Количество результатов (1-10, по умолчанию 5)
         source_filter: Фильтр по источнику: 'notion' | 'url' | 'file' | 'manual'
+        date_from: Фильтр по дате — вернуть только записи не раньше этой даты (YYYY-MM-DD)
 
     Returns:
         Релевантные фрагменты из базы знаний с ссылками на источники
     """
     top_k = max(1, min(top_k, 10))
-    results = search(query=query, top_k=top_k, source_filter=source_filter, hybrid=True)
+    results = search(query=query, top_k=top_k, source_filter=source_filter, hybrid=True, date_from=date_from)
     return format_results_for_claude(results)
 
 
@@ -96,6 +98,7 @@ def kb_add_document(
     title: str,
     source_type: str = "manual",
     source_url: str | None = None,
+    doc_date: str | None = None,
 ) -> str:
     """
     Добавить текст в базу знаний вручную (статья, заметка, конспект).
@@ -105,10 +108,13 @@ def kb_add_document(
         title: Заголовок документа
         source_type: Тип источника ('manual', 'file', 'url')
         source_url: Ссылка на оригинал (опционально)
+        doc_date: Дата документа в формате YYYY-MM-DD (по умолчанию — сегодня)
 
     Returns:
         Подтверждение с количеством созданных чанков
     """
+    import json
+    from datetime import date
     from core.db import get_conn, get_cursor
 
     chunks = chunk_document(text)
@@ -118,19 +124,22 @@ def kb_add_document(
     chunk_texts = [c.text for c in chunks]
     embeddings = embed_texts(chunk_texts)
 
+    resolved_date = doc_date or date.today().isoformat()
+    meta = json.dumps({"doc_date": resolved_date})
+
     with get_conn() as conn:
         with get_cursor(conn) as cur:
             for i, (chunk_text, embedding) in enumerate(zip(chunk_texts, embeddings)):
                 cur.execute(
                     """
                     INSERT INTO documents
-                        (source_type, source_url, title, content, chunk_index, chunk_total, embedding)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        (source_type, source_url, title, content, chunk_index, chunk_total, embedding, metadata)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (source_type, source_url, title, chunk_text, i, len(chunks), embedding),
+                    (source_type, source_url, title, chunk_text, i, len(chunks), embedding, meta),
                 )
 
-    return f"✅ Добавлено: '{title}' — {len(chunks)} чанк(ов)"
+    return f"✅ Добавлено: '{title}' — {len(chunks)} чанк(ов) | 📅 {resolved_date}"
 
 
 # ══════════════════════════════════════════════
@@ -266,7 +275,8 @@ def kb_list_sources(source_type: str | None = None) -> str:
         lines.append(f"**{stype.upper()}** ({len(items)} документов, {total_chunks} чанков)")
         for item in items[:20]:  # ограничиваем вывод
             url_part = f" → {item['source_url']}" if item["source_url"] else ""
-            lines.append(f"  • {item['title'] or 'Untitled'} [{item['chunks']} чанков]{url_part}")
+            date_part = f" | 🕐 {item['last_indexed'].strftime('%Y-%m-%d')}" if item["last_indexed"] else ""
+            lines.append(f"  • {item['title'] or 'Untitled'} [{item['chunks']} чанков]{date_part}{url_part}")
         if len(items) > 20:
             lines.append(f"  ... и ещё {len(items) - 20}")
         lines.append("")

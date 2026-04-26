@@ -175,19 +175,23 @@ def _save_chunks(
     chunks_text: list[str],
     embeddings: list[list[float]],
     conn,
+    last_edited: datetime | None = None,
 ) -> int:
     """Сохранить чанки в БД. Возвращает количество сохранённых чанков."""
+    import json
     total = len(chunks_text)
+    doc_date = last_edited.date().isoformat() if last_edited else None
+    meta = json.dumps({"doc_date": doc_date})
     with get_cursor(conn) as cur:
         for i, (text, embedding) in enumerate(zip(chunks_text, embeddings)):
             cur.execute(
                 """
                 INSERT INTO documents
-                    (source_type, source_id, source_url, title, content, chunk_index, chunk_total, embedding)
+                    (source_type, source_id, source_url, title, content, chunk_index, chunk_total, embedding, metadata)
                 VALUES
-                    ('notion', %s, %s, %s, %s, %s, %s, %s)
+                    ('notion', %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
-                (page_id, url, title, text, i, total, embedding),
+                (page_id, url, title, text, i, total, embedding, meta),
             )
     return total
 
@@ -271,7 +275,7 @@ def index_page(page_id: str, force: bool = False) -> dict:
             deleted = _delete_page_chunks(page_id, conn)
             if deleted > 0:
                 logger.debug(f"Deleted {deleted} old chunks for '{title}'")
-            count = _save_chunks(page_id, title, url, chunk_texts, embeddings, conn)
+            count = _save_chunks(page_id, title, url, chunk_texts, embeddings, conn, last_edited=last_edited)
             _log_index(page_id, "success", count, conn=conn)
 
         logger.info(f"✅ Indexed '{title}': {count} chunks")
