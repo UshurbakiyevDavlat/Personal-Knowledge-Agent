@@ -61,6 +61,10 @@ CREATE TABLE IF NOT EXISTS community_summaries (
     created_at      TIMESTAMPTZ     DEFAULT NOW(),
     updated_at      TIMESTAMPTZ     DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS community_summaries_embedding_idx
+    ON community_summaries USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
 """
 
 

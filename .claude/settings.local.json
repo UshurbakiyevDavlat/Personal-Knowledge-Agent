@@ -5,7 +5,11 @@
       "Bash(Select-Object FullName, PSIsContainer)",
       "Bash(Sort-Object FullName)",
       "Bash(Format-Table -AutoSize)",
-      "Bash(grep -E \"migrate|\\\\.py$\")"
+      "Bash(grep -E \"migrate|\\\\.py$\")",
+      "mcp__4831c742-00e2-40a1-8260-54443ba72ed8__pg_list_tables",
+      "mcp__4831c742-00e2-40a1-8260-54443ba72ed8__pg_list_connections",
+      "mcp__4831c742-00e2-40a1-8260-54443ba72ed8__pg_use_connection",
+      "mcp__4831c742-00e2-40a1-8260-54443ba72ed8__pg_query"
     ]
   }
 }
