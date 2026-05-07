@@ -23,3 +23,12 @@ httpx>=0.27.0                # HTTP клиент (для kb_add_url)
 beautifulsoup4>=4.12.0       # Парсинг HTML страниц
 markdownify>=0.12.0          # HTML → Markdown
 tenacity>=8.3.0              # Retry логика для API вызовов
+pypdf>=4.0.0                 # PDF extraction для kb_add_file
+
+# Visualization (Knowledge Graph Web UI)
+flask>=3.0.0                 # Micro web server для graph.html
+
+# Graph Knowledge (GraphRAG)
+anthropic>=0.25.0            # Claude Haiku для entity extraction и community summaries
+networkx>=3.0                # Граф для community detection
+python-louvain>=0.16         # Louvain community detection алгоритм

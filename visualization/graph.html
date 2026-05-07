@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Knowledge Graph</title>
+<style>
+  body { margin: 0; background: #1a1a2e; font-family: 'Segoe UI', sans-serif; color: #eee; }
+  #controls { position: fixed; top: 12px; left: 12px; z-index: 10; display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn { background: #16213e; border: 1px solid #0f3460; color: #eee; padding: 6px 14px;
+         border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .btn:hover { background: #0f3460; }
+  .btn.active { background: #e94560; border-color: #e94560; }
+  #stats { position: fixed; top: 12px; right: 12px; background: #16213e;
+           padding: 12px; border-radius: 8px; font-size: 13px; min-width: 180px; }
+  #tooltip { position: fixed; background: rgba(22,33,62,0.95); border: 1px solid #0f3460;
+             padding: 10px; border-radius: 6px; font-size: 12px; pointer-events: none;
+             display: none; max-width: 280px; z-index: 20; }
+  #search { background: #16213e; border: 1px solid #0f3460; color: #eee;
+            padding: 6px 12px; border-radius: 6px; font-size: 13px; width: 200px; }
+  svg { width: 100vw; height: 100vh; }
+  .node { cursor: pointer; }
+  .node circle { stroke-width: 1.5px; stroke: rgba(255,255,255,0.3); transition: r 0.2s; }
+  .node:hover circle { stroke: #e94560; stroke-width: 2.5px; }
+  .node.highlighted circle { stroke: #FFD700; stroke-width: 3px; }
+  .link { stroke: rgba(255,255,255,0.12); stroke-width: 1px; }
+  .link.strong { stroke: rgba(255,255,255,0.35); stroke-width: 2px; }
+  #legend { position: fixed; bottom: 12px; left: 12px; background: #16213e;
+            padding: 10px; border-radius: 8px; font-size: 12px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+  #loading { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+             font-size: 20px; color: #e94560; }
+</style>
+</head>
+<body>
+
+<div id="loading">🔄 Загрузка графа...</div>
+
+<div id="controls" style="display:none">
+  <input id="search" type="text" placeholder="Поиск по заголовку...">
+  <button class="btn active" onclick="filterSource('all', this)">Все</button>
+  <button class="btn" onclick="filterSource('notion', this)">Notion</button>
+  <button class="btn" onclick="filterSource('wiki', this)">Wiki</button>
+  <button class="btn" onclick="filterSource('url', this)">URL</button>
+  <button class="btn" onclick="filterSource('file', this)">Файлы</button>
+  <button class="btn" onclick="filterSource('fact', this)">Факты</button>
+  <button class="btn" onclick="resetZoom()">Reset</button>
+</div>
+
+<div id="stats"></div>
+<div id="tooltip"></div>
+<div id="legend" style="display:none"></div>
+<svg id="graph"></svg>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script>
+let allNodes = [], allEdges = [], simulation, svg, g;
+
+const COLOR_MAP = {
+  notion: '#5B8AF5', url: '#F5A623', file: '#7ED321',
+  wiki: '#9013FE', manual: '#D0021B', fact: '#FF6B6B'
+};
+
+async function loadGraph() {
+  try {
+    const [graphRes, statsRes] = await Promise.all([
+      fetch('/api/graph?limit=300'),
+      fetch('/api/stats')
+    ]);
+    const graphData = await graphRes.json();
+    const statsData = await statsRes.json();
+
+    allNodes = graphData.nodes || [];
+    allEdges = graphData.edges || [];
+
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('controls').style.display = 'flex';
+    document.getElementById('legend').style.display = 'block';
+
+    let statsHtml = '<b>📊 KB Stats</b><br>';
+    statsHtml += `Нод: ${allNodes.length} | Рёбер: ${allEdges.length}<br><br>`;
+    if (statsData.sources) {
+      statsData.sources.forEach(s => {
+        statsHtml += `${s.source_type}: ${s.doc_count} doc / ${s.chunk_count} chunks<br>`;
+      });
+    }
+    statsHtml += `<br>Фактов: ${statsData.facts_count || 0}`;
+    document.getElementById('stats').innerHTML = statsHtml;
+
+    let legendHtml = '<b>Легенда:</b>';
+    Object.entries(COLOR_MAP).forEach(([type, color]) => {
+      legendHtml += `<div class="legend-item"><div class="legend-dot" style="background:${color}"></div>${type}</div>`;
+    });
+    document.getElementById('legend').innerHTML = legendHtml;
+
+    renderGraph(allNodes, allEdges);
+  } catch(e) {
+    document.getElementById('loading').textContent = '❌ Ошибка загрузки: ' + e.message;
+  }
+}
+
+function renderGraph(nodes, edges) {
+  d3.select('#graph').selectAll('*').remove();
+
+  const width = window.innerWidth, height = window.innerHeight;
+  svg = d3.select('#graph');
+
+  const zoom = d3.zoom()
+    .scaleExtent([0.1, 8])
+    .on('zoom', (e) => g.attr('transform', e.transform));
+  svg.call(zoom);
+
+  g = svg.append('g');
+  window._zoom = zoom;
+  window._svg = svg;
+
+  const link = g.append('g').selectAll('line')
+    .data(edges).join('line')
+    .attr('class', e => e.weight > 0.85 ? 'link strong' : 'link');
+
+  const node = g.append('g').selectAll('.node')
+    .data(nodes).join('g')
+    .attr('class', 'node')
+    .call(d3.drag()
+      .on('start', (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on('end', (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
+    );
+
+  node.append('circle')
+    .attr('r', d => d.size || 8)
+    .attr('fill', d => COLOR_MAP[d.source_type] || '#888');
+
+  node.append('title').text(d => d.label);
+
+  const tooltip = document.getElementById('tooltip');
+  node.on('mouseover', (e, d) => {
+    tooltip.style.display = 'block';
+    tooltip.style.left = (e.clientX + 12) + 'px';
+    tooltip.style.top = (e.clientY - 10) + 'px';
+    tooltip.innerHTML = `<b>${d.label}</b><br>Тип: ${d.source_type}` +
+      (d.source_url ? `<br><a href="${d.source_url}" target="_blank" style="color:#5B8AF5">Открыть →</a>` : '');
+  }).on('mouseout', () => { tooltip.style.display = 'none'; });
+
+  simulation = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(edges).id(d => d.id).distance(80).strength(e => e.weight * 0.5))
+    .force('charge', d3.forceManyBody().strength(-120))
+    .force('center', d3.forceCenter(width / 2, height / 2))
+    .force('collision', d3.forceCollide().radius(d => (d.size || 8) + 4))
+    .on('tick', () => {
+      link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+          .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+      node.attr('transform', d => `translate(${d.x},${d.y})`);
+    });
+}
+
+function filterSource(type, btn) {
+  document.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+
+  const filteredNodes = type === 'all' ? allNodes : allNodes.filter(n => n.source_type === type);
+  const nodeIds = new Set(filteredNodes.map(n => n.id));
+  const filteredEdges = allEdges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target));
+
+  renderGraph(filteredNodes, filteredEdges);
+}
+
+function resetZoom() {
+  window._svg.transition().duration(500).call(window._zoom.transform, d3.zoomIdentity);
+}
+
+document.getElementById('search').addEventListener('input', function(e) {
+  const query = e.target.value.toLowerCase();
+  if (!query) {
+    d3.selectAll('.node').classed('highlighted', false);
+    return;
+  }
+  d3.selectAll('.node').classed('highlighted', d => d.label.toLowerCase().includes(query));
+});
+
+window.addEventListener('resize', () => {
+  if (allNodes.length > 0) renderGraph(allNodes, allEdges);
+});
+
+loadGraph();
+</script>
+</body>
+</html>

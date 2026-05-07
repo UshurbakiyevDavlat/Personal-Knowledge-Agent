@@ -278,6 +278,16 @@ def index_page(page_id: str, force: bool = False) -> dict:
             count = _save_chunks(page_id, title, url, chunk_texts, embeddings, conn, last_edited=last_edited)
             _log_index(page_id, "success", count, conn=conn)
 
+        # Фоновое извлечение сущностей и связей (не блокирует индексацию)
+        try:
+            from graph_kg.extractor import extract_entities_relations, save_to_db
+            entities, relations = extract_entities_relations(text, title)
+            if entities:
+                with get_conn() as conn:
+                    save_to_db(entities, relations, page_id, conn)
+        except Exception as e:
+            logger.warning(f"Entity extraction skipped for '{title}': {e}")
+
         logger.info(f"✅ Indexed '{title}': {count} chunks")
         return {"status": "indexed", "chunks": count, "title": title}
 

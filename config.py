@@ -33,5 +33,14 @@ class Config:
     # Search
     DEFAULT_TOP_K: int = int(os.getenv("DEFAULT_TOP_K", "5"))
 
+    # Reranking (Voyage rerank-2)
+    RERANK_ENABLED: bool = os.getenv("RERANK_ENABLED", "true").lower() == "true"
+    RERANK_MODEL: str = os.getenv("RERANK_MODEL", "rerank-2")
+    RERANK_TOP_K: int = int(os.getenv("RERANK_TOP_K", "5"))
+    RERANK_CANDIDATES: int = int(os.getenv("RERANK_CANDIDATES", "20"))
+
+    # Anthropic (entity extraction via Claude Haiku)
+    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+
 
 config = Config()

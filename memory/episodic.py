@@ -71,6 +71,117 @@ def delete_fact(key: str) -> bool:
             return cur.rowcount > 0
 
 
+def upsert_temporal_fact(
+    key: str,
+    value: str,
+    category: str = "general",
+    confidence: float = 1.0,
+    context: str | None = None,
+) -> dict:
+    """
+    Создать или обновить факт с bi-temporal семантикой.
+
+    Если значение изменилось — старый факт помечается invalid, создаётся новый.
+    Если значение то же — обновляет только confidence.
+
+    Returns:
+        dict с 'action': 'created' | 'updated' | 'unchanged'
+    """
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+
+    with get_conn() as conn:
+        with get_cursor(conn) as cur:
+            cur.execute(
+                """
+                SELECT id, fact_value FROM episodic_events
+                WHERE fact_key = %s AND valid_to IS NULL AND invalid_at IS NULL
+                ORDER BY valid_from DESC
+                LIMIT 1
+                """,
+                (key,),
+            )
+            current = cur.fetchone()
+
+            if current is None:
+                cur.execute(
+                    """
+                    INSERT INTO episodic_events (fact_key, fact_value, category, confidence, context, valid_from)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (key, value, category, confidence, context, now),
+                )
+                # Обратная совместимость с user_facts
+                cur.execute(
+                    """
+                    INSERT INTO user_facts (key, value, category, confidence)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (key) DO UPDATE SET
+                        value = EXCLUDED.value,
+                        category = EXCLUDED.category,
+                        confidence = EXCLUDED.confidence,
+                        updated_at = NOW()
+                    """,
+                    (key, value, category, confidence),
+                )
+                return {"action": "created", "key": key, "value": value}
+
+            elif current["fact_value"] == value:
+                cur.execute(
+                    "UPDATE episodic_events SET confidence = %s WHERE id = %s",
+                    (confidence, current["id"]),
+                )
+                return {"action": "unchanged", "key": key, "value": value}
+
+            else:
+                old_value = current["fact_value"]
+                cur.execute(
+                    "UPDATE episodic_events SET valid_to = %s, invalid_at = %s WHERE id = %s",
+                    (now, now, current["id"]),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO episodic_events (fact_key, fact_value, category, confidence, context, valid_from)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (key, value, category, confidence, context, now),
+                )
+                cur.execute(
+                    "UPDATE user_facts SET value = %s, updated_at = NOW() WHERE key = %s",
+                    (value, key),
+                )
+                return {"action": "updated", "key": key, "old_value": old_value, "new_value": value}
+
+
+def get_fact_history(key: str) -> list[dict]:
+    """Получить полную историю изменений факта от новейшего к старейшему."""
+    with get_conn() as conn:
+        with get_cursor(conn) as cur:
+            cur.execute(
+                """
+                SELECT fact_value, category, confidence, valid_from, valid_to, invalid_at, source
+                FROM episodic_events
+                WHERE fact_key = %s
+                ORDER BY valid_from DESC
+                """,
+                (key,),
+            )
+            rows = cur.fetchall()
+
+    result = []
+    for row in rows:
+        is_active = row["valid_to"] is None and row["invalid_at"] is None
+        result.append({
+            "value": row["fact_value"],
+            "status": "✅ актуально" if is_active else "❌ устарело",
+            "valid_from": row["valid_from"].isoformat() if row["valid_from"] else None,
+            "valid_to": row["valid_to"].isoformat() if row["valid_to"] else None,
+            "source": row["source"],
+        })
+    return result
+
+
 def format_facts_for_context(facts: list[Fact]) -> str:
     """
     Форматировать факты для системного промпта Claude.

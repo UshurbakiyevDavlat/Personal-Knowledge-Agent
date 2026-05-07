@@ -11,6 +11,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+import config as _config_module
+
 from core.db import get_conn, get_cursor
 from core.embedder import embed_query
 
@@ -160,12 +162,48 @@ def _reciprocal_rank_fusion(
     return [(docs[doc_id], score) for doc_id, score in ranked]
 
 
+def _rerank(
+    query: str,
+    candidates: list[SearchResult],
+    top_k: int,
+) -> list[SearchResult]:
+    """
+    Voyage AI rerank-2 — cross-encoder переранжирование кандидатов из RRF.
+    При ошибке возвращает candidates[:top_k] (RRF fallback).
+    """
+    if not candidates:
+        return candidates
+
+    cfg = _config_module.config
+    try:
+        import voyageai
+        client = voyageai.Client(api_key=cfg.VOYAGE_API_KEY)
+        documents = [r.content for r in candidates]
+        result = client.rerank(
+            query=query,
+            documents=documents,
+            model=cfg.RERANK_MODEL,
+            top_k=top_k,
+        )
+        reranked = []
+        for item in result.results:
+            candidate = candidates[item.index]
+            candidate.score = round(item.relevance_score, 4)
+            reranked.append(candidate)
+        logger.info(f"Reranked {len(candidates)} → {len(reranked)} results")
+        return reranked
+    except Exception as e:
+        logger.warning(f"Reranker failed, using RRF results: {e}")
+        return candidates[:top_k]
+
+
 def search(
     query: str,
     top_k: int = 5,
     source_filter: str | None = None,
     hybrid: bool = True,
     date_from: str | None = None,
+    rerank: bool = True,
 ) -> list[SearchResult]:
     """
     Основная функция поиска.
@@ -176,6 +214,7 @@ def search(
         source_filter: Фильтр по типу источника ('notion', 'url', 'file', 'manual')
         hybrid: True = vector + full-text, False = только vector
         date_from: Вернуть только записи не раньше этой даты (YYYY-MM-DD)
+        rerank: True = применить Voyage rerank-2 после RRF (thread-safe флаг)
 
     Returns:
         Список SearchResult, отсортированных по релевантности
@@ -183,9 +222,14 @@ def search(
     if not query.strip():
         return []
 
-    logger.info(f"Search: '{query}' top_k={top_k} source={source_filter} hybrid={hybrid} date_from={date_from}")
+    cfg = _config_module.config
+    use_rerank = rerank and cfg.RERANK_ENABLED
 
-    # Эмбеддинг запроса
+    logger.info(
+        f"Search: '{query}' top_k={top_k} source={source_filter} "
+        f"hybrid={hybrid} date_from={date_from} rerank={use_rerank}"
+    )
+
     query_embedding = embed_query(query)
 
     with get_conn() as conn:
@@ -197,11 +241,11 @@ def search(
         else:
             ranked = [(doc, doc["score"]) for doc in vector_results]
 
-    # Берём топ-K и конвертируем в SearchResult
+    # Берём RERANK_CANDIDATES кандидатов если rerank включён, иначе top_k
+    candidates_count = cfg.RERANK_CANDIDATES if use_rerank else top_k
     results = []
-    for doc, score in ranked[:top_k]:
+    for doc, score in ranked[:candidates_count]:
         meta = doc.get("metadata") or {}
-        # doc_date: берём из metadata, fallback — indexed_at
         doc_date = meta.get("doc_date")
         if not doc_date and doc.get("indexed_at"):
             doc_date = doc["indexed_at"].date().isoformat()
@@ -218,7 +262,12 @@ def search(
             doc_date=doc_date,
         ))
 
-    logger.info(f"Found {len(results)} results")
+    if use_rerank and len(results) > 1:
+        results = _rerank(query=query, candidates=results, top_k=top_k)
+    else:
+        results = results[:top_k]
+
+    logger.info(f"Found {len(results)} results (rerank={'on' if use_rerank else 'off'})")
     return results
 
 
