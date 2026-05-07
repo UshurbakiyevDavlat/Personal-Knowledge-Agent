@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\dushu\\\\bestForLearning\\\\projects\\\\Personal-Code-Obsidian\" -Recurse -Force)",
+      "Bash(Select-Object FullName, PSIsContainer)",
+      "Bash(Sort-Object FullName)",
+      "Bash(Format-Table -AutoSize)",
+      "Bash(grep -E \"migrate|\\\\.py$\")"
+    ]
+  }
+}
