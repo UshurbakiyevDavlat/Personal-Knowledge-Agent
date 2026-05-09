@@ -9,7 +9,10 @@
       "mcp__4831c742-00e2-40a1-8260-54443ba72ed8__pg_list_tables",
       "mcp__4831c742-00e2-40a1-8260-54443ba72ed8__pg_list_connections",
       "mcp__4831c742-00e2-40a1-8260-54443ba72ed8__pg_use_connection",
-      "mcp__4831c742-00e2-40a1-8260-54443ba72ed8__pg_query"
+      "mcp__4831c742-00e2-40a1-8260-54443ba72ed8__pg_query",
+      "Bash(python \"C:\\\\Users\\\\dushu\\\\AppData\\\\Roaming\\\\Claude\\\\local-agent-mode-sessions\\\\e11a447f-fe8c-455f-86ef-1b7623b7c445\\\\7b7a26ed-257c-4f4e-933f-1f431a3a1536\\\\local_12861558-36ad-4ad3-b880-04e60d48b894\\\\outputs\\\\apply-skill-updates.py\")",
+      "Bash(python -c \"import os; os.environ['PYTHONIOENCODING']='utf-8'\")",
+      "Bash(python -X utf8 \"C:\\\\Users\\\\dushu\\\\AppData\\\\Roaming\\\\Claude\\\\local-agent-mode-sessions\\\\e11a447f-fe8c-455f-86ef-1b7623b7c445\\\\7b7a26ed-257c-4f4e-933f-1f431a3a1536\\\\local_12861558-36ad-4ad3-b880-04e60d48b894\\\\outputs\\\\apply-skill-updates.py\")"
     ]
   }
 }
