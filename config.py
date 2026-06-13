@@ -18,13 +18,17 @@ class Config:
     EMBEDDING_DIM: int = 1024   # voyage-3 → 1024 dimensions
     EMBEDDING_BATCH_SIZE: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "100"))
 
-    # Notion
-    NOTION_API_KEY: str = os.environ["NOTION_API_KEY"]
+    # Notion (опционально — синхронизация отключена с 13.06.2026, KB самодостаточен)
+    # Ключ больше не обязателен: приложение работает без Notion.
+    NOTION_API_KEY: str = os.getenv("NOTION_API_KEY", "")
     NOTION_ROOT_PAGE_IDS: list[str] = [
         p.strip()
         for p in os.getenv("NOTION_ROOT_PAGE_IDS", "").split(",")
         if p.strip()
     ]
+    # Главный рубильник периодической синхронизации Notion.
+    # По умолчанию ВЫКЛЮЧЕНО. Чтобы вернуть авто-синк — NOTION_SYNC_ENABLED=true в .env.
+    NOTION_SYNC_ENABLED: bool = os.getenv("NOTION_SYNC_ENABLED", "false").lower() == "true"
 
     # Chunking
     CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "500"))

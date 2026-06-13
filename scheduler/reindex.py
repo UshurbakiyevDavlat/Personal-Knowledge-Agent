@@ -24,6 +24,7 @@ logger = logging.getLogger("knowledge-agent-scheduler")
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
+from config import config
 from indexer.notion_indexer import run_full_index
 
 
@@ -41,6 +42,15 @@ def periodic_reindex() -> None:
 
 
 if __name__ == "__main__":
+    # Синхронизация Notion отключена с 13.06.2026 (KB самодостаточен, дословный
+    # контент перенесён в базу). Авто-синк не запускается, пока NOTION_SYNC_ENABLED!=true.
+    if not config.NOTION_SYNC_ENABLED:
+        logger.info(
+            "⏸️  Notion sync disabled (NOTION_SYNC_ENABLED != true). "
+            "Scheduler не стартует. Чтобы включить — выставь NOTION_SYNC_ENABLED=true в .env."
+        )
+        sys.exit(0)
+
     scheduler = BlockingScheduler(timezone="Asia/Almaty")
 
     # Каждые 2 часа
