@@ -164,6 +164,72 @@ def kb_add_document(
 
 
 # ══════════════════════════════════════════════
+# kb_upsert_document — обновить (заменить) документ по точному заголовку
+# ══════════════════════════════════════════════
+
+@mcp.tool(
+    annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True},
+)
+def kb_upsert_document(
+    text: str,
+    title: str,
+    source_type: str = "manual",
+    source_url: str | None = None,
+    doc_date: str | None = None,
+) -> str:
+    """
+    Обновить документ: удалить ВСЕ чанки с таким же ТОЧНЫМ заголовком и
+    добавить новый текст. Используется для обновления существующей записи
+    вместо создания дубля.
+
+    В отличие от kb_delete_by_title (частичное ILIKE-совпадение), здесь
+    удаление по точному равенству title — лишнего не заденет.
+
+    Args:
+        text: Новый полный текст документа
+        title: Точный заголовок (заменяется ровно этот документ)
+        source_type: Тип источника ('manual', 'file', 'url')
+        source_url: Ссылка на оригинал (опционально)
+        doc_date: Дата документа YYYY-MM-DD (по умолчанию — сегодня)
+
+    Returns:
+        Подтверждение: сколько старых чанков удалено и сколько добавлено
+    """
+    import hashlib
+    from datetime import date
+    from psycopg2.extras import Json
+    from core.db import get_conn, get_cursor
+
+    chunks = chunk_document(text)
+    if not chunks:
+        return "Ошибка: текст пустой или слишком короткий для индексации."
+
+    chunk_texts = [c.text for c in chunks]
+    embeddings = embed_texts(chunk_texts)
+
+    resolved_date = doc_date or date.today().isoformat()
+    doc_source_id = source_url or hashlib.md5(f"{title}:{text[:200]}".encode()).hexdigest()
+    meta = Json({"doc_date": resolved_date})
+
+    with get_conn() as conn:
+        with get_cursor(conn) as cur:
+            cur.execute("DELETE FROM documents WHERE title = %s", (title,))
+            removed = cur.rowcount
+            for i, (chunk_text, embedding) in enumerate(zip(chunk_texts, embeddings)):
+                cur.execute(
+                    """
+                    INSERT INTO documents
+                        (source_type, source_id, source_url, title, content, chunk_index, chunk_total, embedding, metadata)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (source_type, doc_source_id, source_url, title, chunk_text, i, len(chunks), embedding, meta),
+                )
+
+    action = f"обновлено (−{removed} старых чанков)" if removed else "создано"
+    return f"✅ {action}: '{title}' — {len(chunks)} чанк(ов) | 📅 {resolved_date}"
+
+
+# ══════════════════════════════════════════════
 # kb_add_url — проиндексировать веб-страницу
 # ══════════════════════════════════════════════
 
